@@ -109,7 +109,6 @@ std::string Utils::ReadFile(const std::string& path)
 time_t Utils::StringToTime(std::string timeString)
 {
   // expected timeString "2019-01-20T15:40:00+0100"
-  // expected timeString "2019-01-20T15:40:00+0100"
   struct tm tm
   {
   };
@@ -182,4 +181,19 @@ bool Utils::ends_with(std::string const& haystack, std::string const& end)
   {
     return false;
   }
+}
+
+
+std::string Utils::ReplaceAll(std::string str,
+                              const std::string& search,
+                              const std::string& replace)
+{
+  // taken from: https://stackoverflow.com/questions/2896600/how-to-replace-all-occurrences-of-a-character-in-string
+  size_t start_pos = 0;
+  while ((start_pos = str.find(search, start_pos)) != std::string::npos)
+  {
+    str.replace(start_pos, search.length(), replace);
+    start_pos += replace.length();
+  }
+  return str;
 }

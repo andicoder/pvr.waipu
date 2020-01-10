@@ -59,24 +59,30 @@ struct WaipuChannel
   string strStreamURL; // waipu[links][rel=livePlayout]
 };
 
-struct WaipuEPGMappingEntry
+struct WaipuChannelGroup
 {
-  int iBroadcastId;
+  std::string name;
+  std::vector<WaipuChannel> channels;
+};
+
+struct WaipuEPGEntry
+{
+  int iUniqueBroadcastId;
   int iUniqueChannelId;
-  std::string waipuId;
+  bool isRecordable;
 };
 
 class WaipuData
 {
 public:
-  WaipuData(const std::string& user, const std::string& pass);
+  WaipuData(const std::string& user, const std::string& pass, const WAIPU_PROVIDER provider);
   virtual ~WaipuData(void);
 
   int GetChannelsAmount(void);
   PVR_ERROR GetChannels(ADDON_HANDLE handle, bool bRadio);
 
   int GetChannelGroupsAmount(void);
-  PVR_ERROR GetChannelGroups(ADDON_HANDLE handle, bool bRadio);
+  PVR_ERROR GetChannelGroups(ADDON_HANDLE handle);
   PVR_ERROR GetChannelGroupMembers(ADDON_HANDLE handle, const PVR_CHANNEL_GROUP& group);
 
   virtual string GetChannelStreamUrl(int uniqueId, const string& protocol);
@@ -98,6 +104,7 @@ public:
 
   std::string GetLicense(void);
   WAIPU_LOGIN_STATUS GetLoginStatus(void);
+  PVR_ERROR IsEPGTagRecordable(const EPG_TAG* tag, bool* bIsRecordable);
 
 protected:
   string HttpGet(const string& url);
@@ -107,10 +114,15 @@ protected:
   string HttpRequestToCurl(
       Curl& curl, const string& action, const string& url, const string& postData, int& statusCode);
   bool ApiLogin();
+  bool WaipuLogin();
+  bool O2Login();
   bool LoadChannelData(void);
 
 private:
+  bool ParseAccessToken(void);
   std::vector<WaipuChannel> m_channels;
+  std::vector<WaipuEPGEntry> m_epgEntries;
+  std::vector<WaipuChannelGroup> m_channelGroups;
   std::string username;
   std::string password;
   WaipuApiToken m_apiToken;
@@ -119,4 +131,5 @@ private:
   bool m_active_recordings_update;
   std::vector<string> m_user_channels;
   WAIPU_LOGIN_STATUS m_login_status = WAIPU_LOGIN_STATUS_UNKNOWN;
+  WAIPU_PROVIDER provider;
 };

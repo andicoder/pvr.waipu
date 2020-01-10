@@ -33,7 +33,6 @@ using namespace ADDON;
 #define snprintf _snprintf
 #endif
 
-bool m_bCreated = false;
 ADDON_STATUS m_CurStatus = ADDON_STATUS_UNKNOWN;
 WaipuData* m_data = NULL;
 
@@ -46,6 +45,8 @@ std::string g_strClientPath = "";
 
 std::string waipuUsername;
 std::string waipuPassword;
+WAIPU_PROVIDER provider = WAIPU_PROVIDER_WAIPU;
+std::string protocol;
 
 CHelper_libXBMC_addon* XBMC = NULL;
 CHelper_libXBMC_pvr* PVR = NULL;
@@ -55,10 +56,10 @@ extern "C"
 
   void ADDON_ReadSettings(void)
   {
+    XBMC->Log(LOG_DEBUG, "waipu.tv function call: [%s]", __FUNCTION__);
     char buffer[1024];
     bool boolBuffer;
     int intBuffer;
-    XBMC->Log(LOG_DEBUG, "Read settings");
     if (XBMC->GetSetting("username", &buffer))
     {
       waipuUsername = buffer;
@@ -66,6 +67,21 @@ extern "C"
     if (XBMC->GetSetting("password", &buffer))
     {
       waipuPassword = buffer;
+    }
+    if (XBMC->GetSetting("protocol", &buffer))
+    {
+      protocol = buffer;
+    }
+    if (XBMC->GetSetting("provider_select", &intBuffer))
+    {
+      if (intBuffer == 0)
+      {
+        provider = WAIPU_PROVIDER_WAIPU;
+      }
+      else
+      {
+        provider = WAIPU_PROVIDER_O2;
+      }
     }
     XBMC->Log(LOG_DEBUG, "End Readsettings");
   }
@@ -104,35 +120,45 @@ extern "C"
 
     if (!waipuUsername.empty() && !waipuPassword.empty())
     {
-      m_data = new WaipuData(waipuUsername, waipuPassword);
+      m_data = new WaipuData(waipuUsername, waipuPassword, provider);
 
-      if (m_data->GetLoginStatus() == WAIPU_LOGIN_STATUS_OK)
+      switch (m_data->GetLoginStatus())
       {
+      case WAIPU_LOGIN_STATUS_OK:
         m_CurStatus = ADDON_STATUS_OK;
-        m_bCreated = true;
-      }
-      else if (m_data->GetLoginStatus() == WAIPU_LOGIN_STATUS_NO_NETWORK)
-      {
-        m_CurStatus = ADDON_STATUS_LOST_CONNECTION; // is this the right status?
-        XBMC->Log(LOG_DEBUG, "[load data] ERROR - Network Issue");
-        XBMC->QueueNotification(QUEUE_ERROR, "No network connection?");
-      }
-      else if (m_data->GetLoginStatus() == WAIPU_LOGIN_STATUS_INVALID_CREDENTIALS)
-      {
+        break;
+      case WAIPU_LOGIN_STATUS_NO_NETWORK:
+        m_CurStatus = ADDON_STATUS_NEED_RESTART;
+        XBMC->Log(LOG_ERROR, "[load data] Network issue");
+        XBMC->QueueNotification(QUEUE_ERROR, XBMC->GetLocalizedString(30031));
+        break;
+      case WAIPU_LOGIN_STATUS_INVALID_CREDENTIALS:
         m_CurStatus = ADDON_STATUS_NEED_SETTINGS;
-        XBMC->Log(LOG_DEBUG, "[load data] ERROR - Login invalid");
-        XBMC->QueueNotification(QUEUE_ERROR, "Invalid login credentials!");
+        XBMC->Log(LOG_ERROR, "[load data] Login invalid");
+        XBMC->QueueNotification(QUEUE_ERROR, XBMC->GetLocalizedString(30032));
+        break;
+      case WAIPU_LOGIN_STATUS_UNKNOWN:
+        XBMC->Log(LOG_ERROR, "[login status] unknown state");
+        m_CurStatus = ADDON_STATUS_UNKNOWN;
+        break;
+      default:
+        XBMC->Log(LOG_ERROR, "[login status] unhandled state");
+        m_CurStatus = ADDON_STATUS_UNKNOWN;
+        break;
       }
     }
     return m_CurStatus;
   }
 
-  ADDON_STATUS ADDON_GetStatus() { return m_CurStatus; }
+  ADDON_STATUS ADDON_GetStatus()
+  {
+    XBMC->Log(LOG_DEBUG, "waipu.tv function call: [%s]", __FUNCTION__);
+    return m_CurStatus;
+  }
 
   void ADDON_Destroy()
   {
     delete m_data;
-    m_bCreated = false;
     m_CurStatus = ADDON_STATUS_UNKNOWN;
   }
 
@@ -142,7 +168,7 @@ extern "C"
 
     if (name == "username")
     {
-      string username = (const char*)settingValue;
+      string username = static_cast<const char*>(settingValue);
       if (username != waipuUsername)
       {
         waipuUsername = username;
@@ -152,10 +178,30 @@ extern "C"
 
     if (name == "password")
     {
-      string password = (const char*)settingValue;
+      string password = static_cast<const char*>(settingValue);
       if (password != waipuPassword)
       {
         waipuPassword = password;
+        return ADDON_STATUS_NEED_RESTART;
+      }
+    }
+
+    if (name == "provider_select")
+    {
+      int tmpProviderID = *static_cast<const int*>(settingValue);
+      WAIPU_PROVIDER tmpProvider;
+      if (tmpProviderID == 0)
+      {
+        tmpProvider = WAIPU_PROVIDER_WAIPU;
+      }
+      else
+      {
+        tmpProvider = WAIPU_PROVIDER_O2;
+      }
+
+      if (tmpProvider != provider)
+      {
+        provider = tmpProvider;
         return ADDON_STATUS_NEED_RESTART;
       }
     }
@@ -181,6 +227,7 @@ extern "C"
     pCapabilities->bSupportsTV = true;
     pCapabilities->bSupportsRecordings = true;
     pCapabilities->bSupportsTimers = true;
+    pCapabilities->bSupportsChannelGroups = true;
 
     return PVR_ERROR_NO_ERROR;
   }
@@ -230,6 +277,7 @@ extern "C"
 
   int GetChannelsAmount(void)
   {
+    XBMC->Log(LOG_DEBUG, "waipu.tv function call: [%s]", __FUNCTION__);
     if (m_data)
       return m_data->GetChannelsAmount();
 
@@ -238,6 +286,7 @@ extern "C"
 
   PVR_ERROR GetChannels(ADDON_HANDLE handle, bool bRadio)
   {
+    XBMC->Log(LOG_DEBUG, "waipu.tv function call: [%s]", __FUNCTION__);
     if (m_data)
       return m_data->GetChannels(handle, bRadio);
 
@@ -265,23 +314,38 @@ extern "C"
     setStreamProperty(properties, propertiesCount, PVR_STREAM_PROPERTY_INPUTSTREAMADDON,
                       "inputstream.adaptive");
 
-    // MPEG DASH
-    XBMC->Log(LOG_DEBUG, "[PLAY STREAM] dash");
-    setStreamProperty(properties, propertiesCount, "inputstream.adaptive.manifest_type", "mpd");
-    setStreamProperty(properties, propertiesCount, PVR_STREAM_PROPERTY_MIMETYPE,
-                      "application/xml+dash");
+    if (protocol == "MPEG_DASH")
+    {
+      // MPEG DASH
+      XBMC->Log(LOG_DEBUG, "[PLAY STREAM] dash");
+      setStreamProperty(properties, propertiesCount, "inputstream.adaptive.manifest_type", "mpd");
+      setStreamProperty(properties, propertiesCount, PVR_STREAM_PROPERTY_MIMETYPE,
+                        "application/xml+dash");
 
-    // get widevine license
-    string license = m_data->GetLicense();
-    setStreamProperty(properties, propertiesCount, "inputstream.adaptive.license_type",
-                      "com.widevine.alpha");
-    setStreamProperty(properties, propertiesCount, "inputstream.adaptive.license_key",
-                      "https://drm.wpstr.tv/license-proxy-widevine/cenc/"
-                      "|Content-Type=text%2Fxml&x-dt-custom-data=" +
-                          license + "|R{SSM}|JBlicense");
+      // get widevine license
+      string license = m_data->GetLicense();
+      setStreamProperty(properties, propertiesCount, "inputstream.adaptive.license_type",
+                        "com.widevine.alpha");
+      setStreamProperty(properties, propertiesCount, "inputstream.adaptive.license_key",
+                        "https://drm.wpstr.tv/license-proxy-widevine/cenc/"
+                        "|Content-Type=text%2Fxml&x-dt-custom-data=" +
+                            license + "|R{SSM}|JBlicense");
 
-    setStreamProperty(properties, propertiesCount, "inputstream.adaptive.manifest_update_parameter",
-                      "full");
+      setStreamProperty(properties, propertiesCount,
+                        "inputstream.adaptive.manifest_update_parameter", "full");
+    }
+    else
+    {
+      // HLS
+      protocol = "HLS";
+      XBMC->Log(LOG_DEBUG, "[PLAY STREAM] hls");
+      setStreamProperty(properties, propertiesCount, "inputstream.adaptive.manifest_type", "hls");
+      setStreamProperty(properties, propertiesCount, PVR_STREAM_PROPERTY_MIMETYPE,
+                        "application/x-mpegURL");
+
+      setStreamProperty(properties, propertiesCount,
+                        "inputstream.adaptive.manifest_update_parameter", "full");
+    }
   }
 
   PVR_ERROR GetChannelStreamProperties(const PVR_CHANNEL* channel,
@@ -289,7 +353,8 @@ extern "C"
                                        unsigned int* iPropertiesCount)
   {
 
-    string strUrl = m_data->GetChannelStreamUrl(channel->iUniqueId, "mpeg-dash");
+    string protocol_fix = protocol == "MPEG_DASH" ? "mpeg-dash" : "hls";
+    string strUrl = m_data->GetChannelStreamUrl(channel->iUniqueId, protocol_fix);
     XBMC->Log(LOG_DEBUG, "Stream URL -> %s", strUrl.c_str());
     PVR_ERROR ret = PVR_ERROR_FAILED;
     if (!strUrl.empty())
@@ -302,13 +367,25 @@ extern "C"
     return ret;
   }
 
-  int GetChannelGroupsAmount(void) { return -1; }
+  int GetChannelGroupsAmount(void) { return m_data->GetChannelGroupsAmount(); }
 
-  PVR_ERROR GetChannelGroups(ADDON_HANDLE handle, bool bRadio) { return PVR_ERROR_NOT_IMPLEMENTED; }
+  PVR_ERROR GetChannelGroups(ADDON_HANDLE handle, bool bRadio)
+  {
+    if (bRadio)
+      return PVR_ERROR_NO_ERROR;
+
+    if (m_data)
+      return m_data->GetChannelGroups(handle);
+
+    return PVR_ERROR_SERVER_ERROR;
+  }
 
   PVR_ERROR GetChannelGroupMembers(ADDON_HANDLE handle, const PVR_CHANNEL_GROUP& group)
   {
-    return PVR_ERROR_NOT_IMPLEMENTED;
+    if (m_data)
+      return m_data->GetChannelGroupMembers(handle, group);
+
+    return PVR_ERROR_SERVER_ERROR;
   }
 
   PVR_ERROR SignalStatus(PVR_SIGNAL_STATUS& signalStatus) { return PVR_ERROR_NOT_IMPLEMENTED; }
@@ -317,6 +394,7 @@ extern "C"
 
   PVR_ERROR GetRecordings(ADDON_HANDLE handle, bool deleted)
   {
+    XBMC->Log(LOG_DEBUG, "waipu.tv function call: [%s]", __FUNCTION__);
     if (m_data)
       return m_data->GetRecordings(handle, deleted);
 
@@ -329,7 +407,7 @@ extern "C"
   {
     XBMC->Log(LOG_DEBUG, "[recordings] play it...");
 
-    string strUrl = m_data->GetRecordingURL(*recording, "MPEG_DASH");
+    string strUrl = m_data->GetRecordingURL(*recording, protocol);
     if (strUrl.empty())
     {
       return PVR_ERROR_FAILED;
@@ -430,6 +508,7 @@ extern "C"
   long long LengthRecordedStream(void) { return 0; }
   void DemuxReset(void) {}
   void DemuxFlush(void) {}
+  void FillBuffer(bool mode) {}
   bool OpenLiveStream(const PVR_CHANNEL&) { return false; }
   void CloseLiveStream(void) {}
   int ReadLiveStream(unsigned char* pBuffer, unsigned int iBufferSize) { return 0; }
@@ -466,7 +545,15 @@ extern "C"
   PVR_ERROR SetRecordingLifetime(const PVR_RECORDING*) { return PVR_ERROR_NOT_IMPLEMENTED; }
   PVR_ERROR GetStreamProperties(PVR_STREAM_PROPERTIES*) { return PVR_ERROR_NOT_IMPLEMENTED; }
   PVR_ERROR GetStreamTimes(PVR_STREAM_TIMES*) { return PVR_ERROR_NOT_IMPLEMENTED; }
-  PVR_ERROR IsEPGTagRecordable(const EPG_TAG*, bool*) { return PVR_ERROR_NOT_IMPLEMENTED; }
+  PVR_ERROR IsEPGTagRecordable(const EPG_TAG* tag, bool* bIsRecordable)
+  {
+    if (m_data)
+    {
+      return m_data->IsEPGTagRecordable(tag, bIsRecordable);
+    }
+
+    return PVR_ERROR_FAILED;
+  }
   PVR_ERROR GetEPGTagEdl(const EPG_TAG* epgTag, PVR_EDL_ENTRY edl[], int* size)
   {
     return PVR_ERROR_NOT_IMPLEMENTED;

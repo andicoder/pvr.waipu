@@ -28,12 +28,11 @@
 
 #include <algorithm>
 #include <ctime>
-
+#include <regex>
 
 using namespace std;
 using namespace ADDON;
 using namespace rapidjson;
-
 
 // BEGIN CURL helpers from zattoo addon:
 string WaipuData::HttpGet(const string& url)
@@ -102,7 +101,67 @@ WAIPU_LOGIN_STATUS WaipuData::GetLoginStatus()
 // returns true if m_apiToken contains valid session
 bool WaipuData::ApiLogin()
 {
-  XBMC->Log(LOG_DEBUG, "[login check] start...");
+  if (provider == WAIPU_PROVIDER_WAIPU)
+  {
+    return WaipuLogin();
+  }
+  else
+  {
+    return O2Login();
+  }
+}
+
+bool WaipuData::ParseAccessToken(void)
+{
+  std::vector<std::string> jwt_arr = Utils::SplitString(m_apiToken.accessToken, '.', 3);
+  if (jwt_arr.size() == 3)
+  {
+    XBMC->Log(LOG_DEBUG, "[jwt] middle: %s", jwt_arr.at(1).c_str());
+    string jwt_payload = base64_decode(jwt_arr.at(1));
+    XBMC->Log(LOG_DEBUG, "[jwt] payload: %s", jwt_payload.c_str());
+
+    Document jwt_doc;
+    jwt_doc.Parse(jwt_payload.c_str());
+
+    if (jwt_doc.HasParseError())
+    {
+      m_login_status = WAIPU_LOGIN_STATUS_UNKNOWN;
+      XBMC->Log(LOG_ERROR, "[jwt_doc] ERROR: error while parsing json");
+      return false;
+    }
+
+    string userHandle = jwt_doc["userHandle"].GetString();
+    XBMC->Log(LOG_DEBUG, "[jwt] userHandle: %s", userHandle.c_str());
+    // generate the license
+    string license_plain = "{\"merchant\" : \"exaring\", \"sessionId\" : \"default\", "
+                           "\"userId\" : \"" +
+                           userHandle + "\"}";
+    XBMC->Log(LOG_DEBUG, "[jwt] license_plain: %s", license_plain.c_str());
+    m_license = base64_encode(license_plain.c_str(), license_plain.length());
+    XBMC->Log(LOG_DEBUG, "[jwt] license: %s", m_license.c_str());
+    // get user channels
+    m_user_channels.clear();
+    for (const auto& user_channel : jwt_doc["userAssets"]["channels"]["SD"].GetArray())
+    {
+      string user_channel_s = user_channel.GetString();
+      XBMC->Log(LOG_DEBUG, "[jwt] SD channel: %s", user_channel_s.c_str());
+      m_user_channels.push_back(user_channel_s);
+    }
+    for (const auto& user_channel : jwt_doc["userAssets"]["channels"]["HD"].GetArray())
+    {
+      string user_channel_s = user_channel.GetString();
+      m_user_channels.push_back(user_channel_s);
+      XBMC->Log(LOG_DEBUG, "[jwt] HD channel: %s", user_channel_s.c_str());
+    }
+  }
+  m_login_status = WAIPU_LOGIN_STATUS_OK;
+  return true;
+}
+
+
+bool WaipuData::WaipuLogin()
+{
+  XBMC->Log(LOG_DEBUG, "[login check] WAIPU.TV LOGIN...");
 
   time_t currTime;
   time(&currTime);
@@ -112,7 +171,6 @@ bool WaipuData::ApiLogin()
   {
     // API token exists and is valid, more than x in future
     XBMC->Log(LOG_DEBUG, "[login check] old token still valid");
-    m_login_status = WAIPU_LOGIN_STATUS_OK;
     return true;
   }
 
@@ -141,14 +199,14 @@ bool WaipuData::ApiLogin()
   jsonString = HttpRequestToCurl(curl, "POST", "https://auth.waipu.tv/oauth/token",
                                  dataStream.str(), statusCode);
 
-  XBMC->Log(LOG_DEBUG, "[login check] Login-response (HTTP %i): %s;", statusCode,
+  XBMC->Log(LOG_DEBUG, "[login check] Login-response: (HTTP %i) %s;", statusCode,
             jsonString.c_str());
 
   if (jsonString.length() == 0 && statusCode == -1)
   {
-    // no network connection?!
+    // no network connection?
     m_login_status = WAIPU_LOGIN_STATUS_NO_NETWORK;
-    XBMC->Log(LOG_ERROR, "[Login] debug - no network");
+    XBMC->Log(LOG_ERROR, "[Login] no network connection");
     return false;
   }
   else if (statusCode == 401)
@@ -190,69 +248,117 @@ bool WaipuData::ApiLogin()
     XBMC->Log(LOG_DEBUG, "[login check] refreshToken: %s;", m_apiToken.refreshToken.c_str());
     m_apiToken.expires = currTime + doc["expires_in"].GetUint64();
     XBMC->Log(LOG_DEBUG, "[login check] expires: %i;", m_apiToken.expires);
-    // convert access token to license
-    // userHandle is part of jwt token
-    std::vector<std::string> jwt_arr = Utils::SplitString(m_apiToken.accessToken, '.', 3);
-    if (jwt_arr.size() == 3)
-    {
-      XBMC->Log(LOG_DEBUG, "[jwt] middle: %s", jwt_arr.at(1).c_str());
-      string jwt_payload = base64_decode(jwt_arr.at(1));
-      XBMC->Log(LOG_DEBUG, "[jwt] payload: %s", jwt_payload.c_str());
 
-      if (!Utils::ends_with(jwt_payload, "}}}") && jwt_payload.size() > 0 &&
-          Utils::ends_with(jwt_payload, "subscription\":\""))
-      {
-        // this is a dirty hack. It seems that for some accounts the subscription is cutted
-        jwt_payload = jwt_payload + "O2\"}}}";
-      }
-
-      Document jwt_doc;
-      jwt_doc.Parse(jwt_payload.c_str());
-
-      if (jwt_doc.HasParseError())
-      {
-        m_login_status = WAIPU_LOGIN_STATUS_UNKNOWN;
-        XBMC->Log(LOG_ERROR, "[jwt_doc] ERROR: error while parsing json");
-        return false;
-      }
-
-      string userHandle = jwt_doc["userHandle"].GetString();
-      XBMC->Log(LOG_DEBUG, "[jwt] userHandle: %s", userHandle.c_str());
-      // generate the license
-      string license_plain =
-          "{\"merchant\" : \"exaring\", \"sessionId\" : \"default\", \"userId\" : \"" + userHandle +
-          "\"}";
-      XBMC->Log(LOG_DEBUG, "[jwt] license_plain: %s", license_plain.c_str());
-      m_license = base64_encode(license_plain.c_str(), license_plain.length());
-      XBMC->Log(LOG_DEBUG, "[jwt] license: %s", m_license.c_str());
-      // get user channels
-      m_user_channels.clear();
-      for (const auto& user_channel : jwt_doc["userAssets"]["channels"]["SD"].GetArray())
-      {
-        string user_channel_s = user_channel.GetString();
-        XBMC->Log(LOG_DEBUG, "[jwt] SD channel: %s", user_channel_s.c_str());
-        m_user_channels.push_back(user_channel_s);
-      }
-      for (const auto& user_channel : jwt_doc["userAssets"]["channels"]["HD"].GetArray())
-      {
-        string user_channel_s = user_channel.GetString();
-        m_user_channels.push_back(user_channel_s);
-        XBMC->Log(LOG_DEBUG, "[jwt] HD channel: %s", user_channel_s.c_str());
-      }
-    }
-    m_login_status = WAIPU_LOGIN_STATUS_OK;
-    return true;
+    return ParseAccessToken();
   }
   // no valid session?
   m_login_status = WAIPU_LOGIN_STATUS_UNKNOWN;
   return false;
 }
 
-WaipuData::WaipuData(const string& user, const string& pass)
+bool WaipuData::O2Login()
 {
+  XBMC->Log(LOG_DEBUG, "[login check] O2 TV LOGIN...");
+  time_t currTime;
+  time(&currTime);
 
+  if (!m_apiToken.accessToken.empty() && (m_apiToken.expires - 10 * 60) > currTime)
+  {
+    // API token exists and is valid, more than x in future
+    XBMC->Log(LOG_DEBUG, "[login check] old token still valid");
+    return true;
+  }
+
+  m_login_status = WAIPU_LOGIN_STATUS_OK;
+
+  // curl request
+  Curl curl;
+  int statusCode = 0;
+  curl.AddHeader("User-Agent", WAIPU_USER_AGENT);
+  curl.AddHeader("authority", "o2api.waipu.tv");
+  string respForm =
+      HttpRequestToCurl(curl, "GET",
+                        "https://o2api.waipu.tv/api/o2/login/"
+                        "token?redirectUri=https%3A%2F%2Fo2tv.waipu.tv%2F&inWebview=true",
+                        "", statusCode);
+
+  string postData = "";
+
+  // get the form:
+  regex formPattern("<form[^>]*name=\"Login\"[^>]*action=\"([^\"]*)\"[^>]*>([\\s\\S]*)</form>");
+  smatch matches;
+  if (regex_search(respForm, matches, formPattern))
+  {
+    string form_action = matches[1];
+    string form_content = matches[2];
+    XBMC->Log(LOG_DEBUG, "[form action] %s;", form_action.c_str());
+
+    regex inputPattern("<input[^>]*name=\"([^\"]*)\"[^>]*value=\"([^\"]*)\"[^>]*>");
+    // finding all the match.
+    for (sregex_iterator it =
+             sregex_iterator(form_content.begin(), form_content.end(), inputPattern);
+         it != sregex_iterator(); it++)
+    {
+      smatch match;
+      match = *it;
+      string input_name = match.str(1);
+      string input_value = match.str(2);
+      // we need to dirty HTML-decode &#x3d; to = for base64 padding:
+      input_value = Utils::ReplaceAll(input_value, "&#x3d;", "=");
+
+      XBMC->Log(LOG_DEBUG, "[form input] %s -> %s;", input_name.c_str(), input_value.c_str());
+
+      if (input_name == "IDToken2")
+      {
+        // input for password
+        input_value = password;
+      }
+
+      postData =
+          postData + Utils::UrlEncode(input_name) + "=" + Utils::UrlEncode(input_value) + "&";
+    }
+    // if parameters available: add username
+    if (postData.length() > 0)
+      postData = postData + "IDToken1=" + Utils::UrlEncode(username) + "&";
+  }
+  else
+  {
+    XBMC->Log(LOG_ERROR, "O2 Login Form not found");
+    m_login_status = WAIPU_LOGIN_STATUS_UNKNOWN;
+    return false;
+  }
+
+
+  XBMC->Log(LOG_DEBUG, "[O2] POST params: %s", postData.c_str());
+
+  string resp = HttpRequestToCurl(curl, "POST", "https://login.o2online.de/sso/UI/Login",
+                                  postData.c_str(), statusCode);
+  XBMC->Log(LOG_DEBUG, "[login check] Login-response 2: (HTTP %i) %s;", statusCode, resp.c_str());
+
+  string cookie = curl.GetCookie("user_token");
+  if (cookie.size() == 0)
+  {
+    // invalid credentials ?
+    m_login_status = WAIPU_LOGIN_STATUS_INVALID_CREDENTIALS;
+    return false;
+  }
+
+  m_apiToken.accessToken = cookie;
+  XBMC->Log(LOG_DEBUG, "[login O2] access_token: %s;", cookie.c_str());
+  m_apiToken.refreshToken = "";
+  XBMC->Log(LOG_DEBUG, "[login check] refreshToken: empty");
+  m_apiToken.expires = currTime + 3600; // expires after 1h; TODO: find real value
+  XBMC->Log(LOG_DEBUG, "[login check] expires: %i;", m_apiToken.expires);
+
+  return ParseAccessToken();
+}
+
+
+WaipuData::WaipuData(const string& user, const string& pass, const WAIPU_PROVIDER provider_p)
+{
   username = user;
   password = pass;
+  provider = provider_p;
   m_recordings_count = 0;
   m_active_recordings_update = false;
 
@@ -262,15 +368,16 @@ WaipuData::WaipuData(const string& user, const string& pass)
 WaipuData::~WaipuData(void)
 {
   m_channels.clear();
+  m_epgEntries.clear();
+  m_channelGroups.clear();
   m_apiToken = {};
 }
 
 bool WaipuData::LoadChannelData(void)
 {
-
   if (!ApiLogin())
   {
-    // no valid accessToken
+    // no valid session
     return false;
   }
 
@@ -299,6 +406,10 @@ bool WaipuData::LoadChannelData(void)
   XBMC->Log(LOG_DEBUG, "[channels] iterate channels");
   XBMC->Log(LOG_DEBUG, "[channels] size: %i;", channelsDoc["result"].Size());
 
+
+  WaipuChannelGroup favgroup;
+  favgroup.name = "Favoriten";
+
   int i = 0;
   for (const auto& channel : channelsDoc["result"].GetArray())
   {
@@ -320,7 +431,7 @@ bool WaipuData::LoadChannelData(void)
 
     ++i;
     WaipuChannel waipu_channel;
-    waipu_channel.iChannelNumber = i; //position
+    waipu_channel.iChannelNumber = i; // position
     XBMC->Log(LOG_DEBUG, "[channel] channelnr(pos): %i;", waipu_channel.iChannelNumber);
 
     waipu_channel.waipuID = waipuid; // waipu[id]
@@ -331,10 +442,10 @@ bool WaipuData::LoadChannelData(void)
     XBMC->Log(LOG_DEBUG, "[channel] id: %i;", uniqueId);
 
     string displayName = channel["displayName"].GetString();
-    waipu_channel.strChannelName = displayName; //waipu[displayName]
+    waipu_channel.strChannelName = displayName; // waipu[displayName]
     XBMC->Log(LOG_DEBUG, "[channel] name: %s;", waipu_channel.strChannelName.c_str());
 
-    //iterate links
+    // iterate links
     string icon = "";
     string icon_sd = "";
     string icon_hd = "";
@@ -378,8 +489,14 @@ bool WaipuData::LoadChannelData(void)
     }
     XBMC->Log(LOG_DEBUG, "[channel] selected channel logo: %s", waipu_channel.strIconPath.c_str());
 
+    bool isFav = channel["faved"].GetBool();
+    if (isFav)
+      favgroup.channels.push_back(waipu_channel);
+
     m_channels.push_back(waipu_channel);
   }
+
+  m_channelGroups.push_back(favgroup);
 
   return true;
 }
@@ -415,7 +532,6 @@ PVR_ERROR WaipuData::GetChannels(ADDON_HANDLE handle, bool bRadio)
 
 string WaipuData::GetChannelStreamUrl(int uniqueId, const string& protocol)
 {
-
   for (const auto& thisChannel : m_channels)
   {
     if (thisChannel.iUniqueId == (int)uniqueId)
@@ -467,17 +583,48 @@ string WaipuData::GetChannelStreamUrl(int uniqueId, const string& protocol)
 
 int WaipuData::GetChannelGroupsAmount(void)
 {
-  return -1;
+  return static_cast<int>(m_channelGroups.size());
 }
 
-PVR_ERROR WaipuData::GetChannelGroups(ADDON_HANDLE handle, bool bRadio)
+PVR_ERROR WaipuData::GetChannelGroups(ADDON_HANDLE handle)
 {
-  return PVR_ERROR_NOT_IMPLEMENTED;
+  std::vector<WaipuChannelGroup>::iterator it;
+  for (it = m_channelGroups.begin(); it != m_channelGroups.end(); ++it)
+  {
+    PVR_CHANNEL_GROUP xbmcGroup;
+    memset(&xbmcGroup, 0, sizeof(PVR_CHANNEL_GROUP));
+    xbmcGroup.iPosition = 0; /* not supported  */
+    xbmcGroup.bIsRadio = false; /* is radio group */
+    strncpy(xbmcGroup.strGroupName, it->name.c_str(), sizeof(xbmcGroup.strGroupName) - 1);
+
+    PVR->TransferChannelGroup(handle, &xbmcGroup);
+  }
+  return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR WaipuData::GetChannelGroupMembers(ADDON_HANDLE handle, const PVR_CHANNEL_GROUP& group)
 {
-  return PVR_ERROR_NOT_IMPLEMENTED;
+  for (const auto& cgroup : m_channelGroups)
+  {
+    if (cgroup.name != group.strGroupName)
+      continue;
+
+    for (const auto& channel : cgroup.channels)
+    {
+      PVR_CHANNEL_GROUP_MEMBER xbmcGroupMember;
+      memset(&xbmcGroupMember, 0, sizeof(PVR_CHANNEL_GROUP_MEMBER));
+
+      strncpy(xbmcGroupMember.strGroupName, group.strGroupName,
+              sizeof(xbmcGroupMember.strGroupName) - 1);
+      xbmcGroupMember.iChannelUniqueId = static_cast<unsigned int>(channel.iUniqueId);
+      xbmcGroupMember.iChannelNumber = static_cast<unsigned int>(channel.iChannelNumber);
+
+      PVR->TransferChannelGroupMember(handle, &xbmcGroupMember);
+    }
+    return PVR_ERROR_NO_ERROR;
+  }
+
+  return PVR_ERROR_NO_ERROR;
 }
 
 PVR_ERROR WaipuData::GetEPGForChannel(ADDON_HANDLE handle,
@@ -497,12 +644,12 @@ PVR_ERROR WaipuData::GetEPGForChannel(ADDON_HANDLE handle,
 
     char startTime[100];
     std::tm* pstm = std::localtime(&iStart);
-    //2019-01-20T23:59:59
+    // 2019-01-20T23:59:59
     std::strftime(startTime, 32, "%Y-%m-%dT%H:%M:%S", pstm);
 
     char endTime[100];
     std::tm* petm = std::localtime(&iEnd);
-    //2019-01-20T23:59:59
+    // 2019-01-20T23:59:59
     std::strftime(endTime, 32, "%Y-%m-%dT%H:%M:%S", petm);
 
     string jsonEpg =
@@ -529,8 +676,8 @@ PVR_ERROR WaipuData::GetEPGForChannel(ADDON_HANDLE handle,
 
     for (const auto& epgData : epgDoc["result"].GetArray())
     {
-
       EPG_TAG tag;
+      WaipuEPGEntry epgEntry;
       memset(&tag, 0, sizeof(EPG_TAG));
 
       // generate a unique boadcast id
@@ -539,9 +686,17 @@ PVR_ERROR WaipuData::GetEPGForChannel(ADDON_HANDLE handle,
       int dirtyID = Utils::GetIDDirty(epg_bid);
       XBMC->Log(LOG_DEBUG, "[epg] epg_bid dirty: %i;", dirtyID);
       tag.iUniqueBroadcastId = dirtyID;
+      epgEntry.iUniqueBroadcastId = dirtyID;
 
       // channel ID
       tag.iUniqueChannelId = myChannel.iUniqueId;
+      epgEntry.iUniqueChannelId = myChannel.iUniqueId;
+
+      // is recordable
+      bool isRecordable = !epgData["recordingForbidden"].GetBool();
+      XBMC->Log(LOG_DEBUG, "[epg] recordable: %i;", isRecordable);
+      epgEntry.isRecordable = isRecordable;
+      m_epgEntries.push_back(epgEntry);
 
       // set title
       tag.strTitle = epgData["title"].GetString();
@@ -555,7 +710,7 @@ PVR_ERROR WaipuData::GetEPGForChannel(ADDON_HANDLE handle,
       string endTime = epgData["stopTime"].GetString();
       tag.endTime = Utils::StringToTime(endTime);
 
-      //tag.strPlotOutline     = myTag.strPlotOutline.c_str();
+      // tag.strPlotOutline     = myTag.strPlotOutline.c_str();
 
       // set description
       if (epgData.HasMember("description") && !epgData["description"].IsNull())
@@ -564,7 +719,7 @@ PVR_ERROR WaipuData::GetEPGForChannel(ADDON_HANDLE handle,
         XBMC->Log(LOG_DEBUG, "[epg] description: %s;", epgData["description"].GetString());
       }
 
-      //tag.strIconPath        = myTag.strIconPath.c_str();
+      // tag.strIconPath        = myTag.strIconPath.c_str();
 
       tag.iFlags = EPG_TAG_FLAG_UNDEFINED;
 
@@ -644,7 +799,6 @@ PVR_ERROR WaipuData::GetRecordings(ADDON_HANDLE handle, bool bDeleted)
 
   for (const auto& recording : recordingsDoc["result"].GetArray())
   {
-
     // skip not FINISHED entries
     string status = recording["status"].GetString();
     if (status != "FINISHED")
@@ -802,7 +956,6 @@ std::string WaipuData::GetRecordingURL(const PVR_RECORDING& recording, const str
 
 PVR_ERROR WaipuData::DeleteRecording(const PVR_RECORDING& recording)
 {
-
   if (ApiLogin())
   {
     string recording_id = recording.strRecordingId;
@@ -853,7 +1006,6 @@ PVR_ERROR WaipuData::GetTimers(ADDON_HANDLE handle)
 
   for (const auto& timer : timersDoc["result"].GetArray())
   {
-
     // skip not FINISHED entries
     string status = timer["status"].GetString();
     if (status != "SCHEDULED" && status != "RECORDING")
@@ -945,7 +1097,6 @@ PVR_ERROR WaipuData::GetTimers(ADDON_HANDLE handle)
 
 PVR_ERROR WaipuData::DeleteTimer(const PVR_TIMER& timer)
 {
-
   if (ApiLogin())
   {
     int timer_id = timer.iClientIndex;
@@ -961,7 +1112,6 @@ PVR_ERROR WaipuData::DeleteTimer(const PVR_TIMER& timer)
 
 PVR_ERROR WaipuData::AddTimer(const PVR_TIMER& timer)
 {
-
   if (ApiLogin())
   {
     // {"programId":"_1051966761","channelId":"PRO7","startTime":"2019-02-03T18:05:00.000Z","stopTime":"2019-02-03T19:15:00.000Z"}
@@ -985,4 +1135,29 @@ std::string WaipuData::GetLicense(void)
   // ensure that userHandle is valid
   ApiLogin();
   return m_license;
+}
+
+PVR_ERROR WaipuData::IsEPGTagRecordable(const EPG_TAG* tag, bool* bIsRecordable)
+{
+  time_t current_time;
+  time(&current_time);
+  if (tag->endTime < current_time)
+  {
+    // if tag is in past, no recording is possible
+    *bIsRecordable = false;
+    return PVR_ERROR_NO_ERROR;
+  }
+
+  for (const auto& epgEntry : m_epgEntries)
+  {
+    if (epgEntry.iUniqueBroadcastId != tag->iUniqueBroadcastId)
+      continue;
+    if (epgEntry.iUniqueChannelId != tag->iUniqueChannelId)
+      continue;
+    *bIsRecordable = epgEntry.isRecordable;
+    return PVR_ERROR_NO_ERROR;
+  }
+
+  *bIsRecordable = false;
+  return PVR_ERROR_NO_ERROR;
 }

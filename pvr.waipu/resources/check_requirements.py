@@ -22,7 +22,7 @@ else:
 	# widevine not installed; notify user
 	xbmc.log("[pvr.waipu] widevine: not installed", level=xbmc.LOGDEBUG)
 	widevine_status = "Error - Not found!"
-
+	
 network_status_arr = getStatus()
 network_status = network_status_arr["statusText"]
 

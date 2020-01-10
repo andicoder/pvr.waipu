@@ -27,4 +27,7 @@ public:
   static int GetChannelId(const char* strChannelName);
   static int stoiDefault(std::string str, int i);
   static bool ends_with(std::string const& haystack, std::string const& end);
+  static std::string ReplaceAll(std::string str,
+                                const std::string& search,
+                                const std::string& replace);
 };
