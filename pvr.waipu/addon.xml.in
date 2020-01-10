@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <addon
   id="pvr.waipu"
-  version="0.2.2"
+  version="1.3.3-Leia"
   name="waipu.tv PVR Client"
-  provider-name="flubshi">
+  provider-name="andikodinerd">
   <requires>@ADDON_DEPENDS@
     <import addon="script.module.inputstreamhelper" version="0.4.1"/>
     <import addon="script.module.requests" version="2.3.0"/>
