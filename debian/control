@@ -2,8 +2,9 @@ Source: kodi-pvr-waipu
 Priority: extra
 Maintainer: Nobody <nobody@kodi.tv>
 Build-Depends: debhelper (>= 9.0.0), cmake,
-               libkodiplatform-dev (>= 18.0.0), kodi-addon-dev
-Standards-Version: 3.9.2
+               kodi-addon-dev, libp8-platform-dev,
+               rapidjson-dev (>= 1.1.0)
+Standards-Version: 3.9.4
 Section: libs
 
 Package: kodi-pvr-waipu
